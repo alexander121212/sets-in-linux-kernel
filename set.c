@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
+#include <linux/slab.h>
  
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Set");
@@ -16,7 +17,7 @@ typedef struct _Set{
 
 	void (*Add)(void* item, unsigned int sizeOfItem);
 	void (*AddRange)(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet );
-	int  (*RemoveItem)(void* item, sizeOfItem);
+	int  (*RemoveItem)(void* item,unsigned int sizeOfItem);
 	int  (*Contains)(void* item, unsigned int sizeOfItem);
 	int  (*Count)(void);
 
@@ -25,29 +26,27 @@ typedef struct _Set{
 	void (*Difference)(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet);
 	void (*SymmetricDifference)(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet);
 
-	struct _Data {
+	struct _DataSet {
 		void* item;
 		unsigned int size;
 		struct list_head;
-	}Data;
+	}DataSet;
 } Set;
 
 
 typedef struct _Data {
 	void* item;
 	unsigned int size;
-	struct list_head;
+	struct list_head list;
 } Data;
 
-Data *g_DataSet;
-
-int Ctor(void)
+int Ctor(Data* dataSet)
 {
-	INIT_LIST_HEAD(&g_DataSet.list);     
+	INIT_LIST_HEAD(&dataSet->list);     
 	return 0;
 }
 
-void Add(void* item, unsigned int sizeOfItem)
+void Add(Data* dataSet, void* item, unsigned int sizeOfItem)
 {
 	Data *aNewData;
 
@@ -57,30 +56,24 @@ void Add(void* item, unsigned int sizeOfItem)
   	aNewData->size = sizeOfItem;
 
   	INIT_LIST_HEAD(&aNewData->list);
- 	list_add_tail(&(aNewData->list), &(g_DataSet.list));
+ 	list_add_tail(&(aNewData->list), &(dataSet->list));
 }
 
-void AddRange(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet )
+void AddRange(Data* dataSet, void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet )
 {
 	Data *aNewData;
 
+	unsigned int i;
 	for(i=0; i<sizeOfSet; ++i){
-       		aNewData = kmalloc(sizeof(*aNewData), GFP_KERNEL);
-
-		aNewData->item = *items[i];
-  		aNewData->size = sizeOfItem;
-
-       		INIT_LIST_HEAD(&aNewData->list);
- 		list_add_tail(&(aNewData->list), &(g_DataSet.list));
+		Add(dataSet, *(items + i*sizeOfOneItem), sizeOfOneItem);
 	}
-
 }
 
-int  RemoveItem(void* item, sizeOfItem)
+int  RemoveItem(Data* dataSet, void* item, unsigned int sizeOfItem)
 {
 	Data *aData, *tmp;
 
-	list_for_each_entry_safe(aData, tmp, &g_DataSet.list, list){
+	list_for_each_entry_safe(aData, tmp, &dataSet->list, list){
 		if (aData->item == item) {
 			list_del(&aData->list);
  			kfree(aData);
@@ -90,12 +83,12 @@ int  RemoveItem(void* item, sizeOfItem)
 	return true;
 }
 
-int  Contains(void* item, unsigned int sizeOfItem)
+int  Contains(Data* dataSet, void* item, unsigned int sizeOfItem)
 {
 
 	Data *aData, *tmp;
 
-	list_for_each_entry_safe(aData, tmp, &g_DataSet.list, list){
+	list_for_each_entry_safe(aData, tmp, &dataSet->list, list){
 		if (aData->item == item) {
 			return true;
 		}
@@ -104,71 +97,105 @@ int  Contains(void* item, unsigned int sizeOfItem)
 	return false;
 }
 
-int  Count(void)
+int  Count(Data* dataSet) 
 {
 
 	Data *aData, *tmp;
 	unsigned int counter = 0;
 
-	list_for_each_entry_safe(aData, tmp, &g_DataSet.list, list){
+	list_for_each_entry_safe(aData, tmp, &dataSet->list, list){
 		counter++;
 	 }
 
 	return counter;
 }
 
-void Dtor(void)
+void Dtor(Data* dataSet)
 {
 	
 	Data *aData, *tmp;
  	printk(KERN_INFO "deleting the list using list_for_each_entry_safe()n");
 
-	list_for_each_entry_safe(aData, tmp, &g_DataSet.list, list){
-		printk(KERN_INFO "freeing node %sn", aData->name);
+	list_for_each_entry_safe(aData, tmp, &dataSet->list, list){
+		printk(KERN_INFO "freeing node %dn", aData->item);
 		list_del(&aData->list);
  		kfree(aData);
 	 }
 }
 
-
-void Union(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet )
+int set_copy(Data *dstSet, Data *srcSet)
 {
-	Data  *aData, *tmp;
+	
+	Data *aData, *tmp;
+	list_for_each_entry_safe(aData, tmp, &srcSet->list, list){
+		Add(dstSet, srcSet->item, srcSet->size);	
+	}
+
+	return true;
+}
+
+
+Data* Union(Data* dataSet, void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet )
+{
+	Data  *unionSet;
+	unsigned int i;
+	
+	Ctor(unionSet);
+
+	for(i=0; i<sizeOfSet; i++){
+		if (!Contains(dataSet, *(items + i*sizeOfOneItem), sizeOfOneItem)) {
+			Add(unionSet, *(items + i*sizeOfOneItem), sizeOfOneItem);	
+		}
+	 }
+
+	return unionSet;
+}
+
+Data* Intersection(Data* dataSet, void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
+{
+    	Data* intersectionSet;
+
 	unsigned int i;
 
-	for(i=0; i<sizeOfSet)
-		if (!Contains(*item[i])) {
-			Add(*item, sizeOfOneItem);	
+	Ctor(intersectionSet);
+
+	for(i=0; i<sizeOfSet; i++){
+		if (Contains(dataSet, *(items + i*sizeOfOneItem), sizeOfOneItem)) {
+			Add(intersectionSet, *(items + i*sizeOfOneItem), sizeOfOneItem);	
 		}
 	 }
  
+    return intersectionSet;    
 }
 
-void Intersection(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
+Data* Difference(Data* dataSet, void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
 {
-	
+	Data *differenceSet;
+
+	Ctor(differenceSet);
+
+	set_copy(differenceSet, dataSet);
+ 
+	unsigned int i;
+	for(i=0; i<sizeOfSet; i++){
+		RemoveItem(differenceSet, *(items + i*sizeOfOneItem), sizeOfOneItem);	
+	 }
+ 
+        return differenceSet;
 }
 
-void Difference(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
+Data* SymmetricDifference(Data* dataSet, void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
 {
-	
-}
 
-void SymmetricDifference(void** items, unsigned int sizeOfOneItem, unsigned int sizeOfSet)
-{
-	
+    Data *intersection = Intersection(dataSet, items, sizeOfOneItem, sizeOfSet);
+    
+ 
+    return Difference(intersection, items, sizeOfOneItem, sizeOfSet);    
 }
 
 int init_module() {
  
 	printk(KERN_INFO "initialize kernel modulen");
-	Ctor(); 
-
-
- 	list_for_each_entry(aData, &g_DataSet.list, list) {
-	 	printk(KERN_INFO "Data: %s; weight: %d; gender: %sn", aData->name, aData->weight, aData->gender==0?"Female":"Male");
-	}
-
   	printk(KERN_INFO "n");
          
    return 0;
@@ -177,5 +204,4 @@ int init_module() {
 void cleanup_module() {
 
 	printk(KERN_INFO "kernel module unloaded.n");
-	Dtor();
 }
